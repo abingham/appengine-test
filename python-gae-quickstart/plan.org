@@ -1,0 +1,44 @@
+I want to test the plumbing for a possible decktape implementation on gcloud.
+
+* The rough plan
+** appengine endpoint to receive requests
+  This will get the conversion requests, queue up work, and create metadata, and
+  respond with a status link.
+** appengine endpoint to handle status
+  This will check the metadata and let the user know the state of the work,
+  including any link for downloading the results.
+** nosql database of metadata
+  Very similar to what we have in the current implementation. This will be
+  updated by both the front end (as requests are received) and by the back end
+  (as results or errors are generated).
+** cloud storage bucket of PDFs
+  as PDFs are created, they will go in the bucket and the metadata will be
+  updated to point to them.
+** pubsub queue for getting work to the workers
+** preemptible VMs for doing the actual conversion work
+  This is the trickiest part. I think we need a [[https://cloud.google.com/compute/docs/instance-groups/creating-groups-of-managed-instances][managed group]] of preemptible VMS
+  using a [[https://cloud.google.com/compute/docs/images/create-delete-deprecate-private-images][private image]] which contains decktape. These VMs will need to do one
+  of two things:
+
+   1. Poll the queue for work, performing it as needed
+   2. respond to pushes somehow. I'm not sure how this ultimately works.
+
+  A push model seems ideal, but since it relies on the subscription having a URL
+  to send messages to, I'm not sure what URL to supply. Does the instance group
+  magically share a URL? I don't know.
+
+  I think I can see how a pull model works, though. The VM will have a program
+  that pulls from the queue, does the work, and loops. Since pulls are
+  (apparently) blocking by default, we don't have to do polling. The autoscaling
+  for the instance group will be based on queue size; as the queue gets too big,
+  more VMs will be spun up.
+
+* Creating an instance group
+  The hardest part here is coming up with the custom image that will be used for the instances. The patterns is something like this:
+
+   1. Create a "workspace" VM which you will mold into the image you want to use.
+   2. Once it's where you want it (i.e. it has the right software, it boots into
+      the expected state, etc.) you need to delete the instance *without
+      deleting the disk*. This is a setting on the VM that you need to uncheck.
+   3. From the disk of the now-deleted image, you can create an image.
+   4. Use the image you just created as the basis for an instance template. Viola!
